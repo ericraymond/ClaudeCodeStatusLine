@@ -1,6 +1,24 @@
 #!/bin/bash
-# Source: https://github.com/daniel3303/ClaudeCodeStatusLine
-# Single line: Model | tokens | %used | %remain | think | 5h bar @reset | 7d bar @reset | extra
+# Derived from: https://github.com/daniel3303/ClaudeCodeStatusLine
+# Single line: Model (effort) | tokens/total (%) | dir@branch | cost (+delta) | 5h | 7d
+#
+# Install:
+#   mkdir -p ~/.claude/statusline
+#   curl -o ~/.claude/statusline/statusline.sh https://raw.githubusercontent.com/ericraymond/ClaudeCodeStatusLine/main/statusline.sh
+#   chmod +x ~/.claude/statusline/statusline.sh
+#
+# Add to ~/.claude/settings.json:
+#   jq '.statusLine = {"type":"command","command":"~/.claude/statusline/statusline.sh"}' \
+#     ~/.claude/settings.json > /tmp/sl.json && mv /tmp/sl.json ~/.claude/settings.json
+#
+# Then restart Claude Code.
+#
+# Changes from upstream:
+#   - Layout: Model (effort) | context% | dir@branch | cost (+delta) | 5h | 7d | v<cli>
+#   - Added session cost display with per-message delta
+#   - Effort level moved inline next to model name
+#   - 5h/7d hidden when no data (no placeholder dashes)
+#   - awk injection fixed: shell vars passed via -v instead of string interpolation
 
 set -f  # disable globbing
 VERSION="1.4.4"
@@ -28,9 +46,9 @@ reset='\033[0m'
 format_tokens() {
     local num=$1
     if [ "$num" -ge 1000000 ]; then
-        awk "BEGIN {v=sprintf(\"%.1f\",$num/1000000)+0; if(v==int(v)) printf \"%dm\",v; else printf \"%.1fm\",v}"
+        awk -v n="$num" 'BEGIN {v=sprintf("%.1f",n/1000000)+0; if(v==int(v)) printf "%dm",v; else printf "%.1fm",v}'
     elif [ "$num" -ge 1000 ]; then
-        awk "BEGIN {printf \"%.0fk\", $num / 1000}"
+        awk -v n="$num" 'BEGIN {printf "%.0fk", n / 1000}'
     else
         printf "%d" "$num"
     fi
@@ -70,6 +88,7 @@ version_gt() {
     [ "$a3" -gt "$b3" ] 2>/dev/null && return 0
     return 1
 }
+
 # ===== Extract data from JSON =====
 model_name=$(echo "$input" | jq -r '.model.display_name // "Claude"')
 model_name=$(echo "$model_name" | sed 's/ *(\([0-9.]*[kKmM]*\) context)/ \1/')  # "(1M context)" → "1M"
@@ -97,6 +116,7 @@ pct_remain=$(( 100 - pct_used ))
 used_comma=$(format_commas $current)
 remain_comma=$(format_commas $(( size - current )))
 
+# Check reasoning effort — stdin JSON is authoritative (live), env var and settings.json as fallbacks
 settings_path="$claude_config_dir/settings.json"
 effort_level=""
 stdin_effort=$(echo "$input" | jq -r '.effort.level // empty' 2>/dev/null)
@@ -111,6 +131,7 @@ fi
 [ -z "$effort_level" ] && effort_level="medium"
 
 # ===== Claude CLI version (cached, 1h TTL) =====
+mkdir -p /tmp/claude
 cli_version_cache="/tmp/claude/statusline-cli-version"
 cli_version=""
 cli_version_max_age=3600
@@ -127,14 +148,24 @@ fi
 if [ -z "$cli_version" ]; then
     cli_version=$(claude --version 2>/dev/null | awk '{print $1}')
     if [ -n "$cli_version" ]; then
-        mkdir -p /tmp/claude 2>/dev/null
         echo "$cli_version" > "$cli_version_cache"
     fi
 fi
 
 # ===== Build single-line output =====
 out=""
-out+="${blue}${model_name}${reset}"
+effort_colored=""
+case "$effort_level" in
+    low)    effort_colored="${dim}${effort_level}${reset}" ;;
+    medium) effort_colored="${orange}med${reset}" ;;
+    high)   effort_colored="${green}${effort_level}${reset}" ;;
+    xhigh)  effort_colored="${purple}${effort_level}${reset}" ;;
+    max)    effort_colored="${red}${effort_level}${reset}" ;;
+    *)      effort_colored="${green}${effort_level}${reset}" ;;
+esac
+out+="${blue}${model_name}${reset} ${dim}(${reset}${effort_colored}${dim})${reset}"
+out+=" ${dim}|${reset} "
+out+="${orange}${used_tokens}/${total_tokens}${reset} ${dim}(${reset}${green}${pct_used}%${reset}${dim})${reset}"
 
 # Current working directory
 cwd=$(echo "$input" | jq -r '.cwd // empty')
@@ -150,20 +181,7 @@ if [ -n "$cwd" ]; then
     fi
 fi
 
-out+=" ${dim}|${reset} "
-out+="${orange}${used_tokens}/${total_tokens}${reset} ${dim}(${reset}${green}${pct_used}%${reset}${dim})${reset}"
-out+=" ${dim}|${reset} "
-out+="effort: "
-case "$effort_level" in
-    low)    out+="${dim}${effort_level}${reset}" ;;
-    medium) out+="${orange}med${reset}" ;;
-    high)   out+="${green}${effort_level}${reset}" ;;
-    xhigh)  out+="${purple}${effort_level}${reset}" ;;
-    max)    out+="${red}${effort_level}${reset}" ;;
-    *)      out+="${green}${effort_level}${reset}" ;;
-esac
-
-# ===== Cross-platform OAuth token resolution (from statusline.sh) =====
+# ===== Cross-platform OAuth token resolution =====
 # Tries credential sources in order: env var → macOS Keychain → Linux creds file → GNOME Keyring
 get_oauth_token() {
     local token=""
@@ -219,7 +237,7 @@ get_oauth_token() {
     echo ""
 }
 
-# ===== LINE 2 & 3: Usage limits with progress bars =====
+# ===== Usage limits =====
 # First, try to use rate_limits data provided directly by Claude Code in the JSON input.
 # This is the most reliable source — no OAuth token or API call required.
 builtin_five_hour_pct=$(echo "$input" | jq -r '.rate_limits.five_hour.used_percentage // empty')
@@ -299,8 +317,6 @@ if $needs_refresh; then
 fi
 
 # Cross-platform ISO to epoch conversion
-# Converts ISO 8601 timestamp (e.g. "2025-06-15T12:30:00Z" or "2025-06-15T12:30:00.123+00:00") to epoch seconds.
-# Properly handles UTC timestamps and converts to local time.
 iso_to_epoch() {
     local iso_str="$1"
 
@@ -320,7 +336,6 @@ iso_to_epoch() {
 
     # Check if timestamp is UTC (has Z or +00:00 or -00:00)
     if [[ "$iso_str" == *"Z"* ]] || [[ "$iso_str" == *"+00:00"* ]] || [[ "$iso_str" == *"-00:00"* ]]; then
-        # For UTC timestamps, parse with timezone set to UTC
         epoch=$(env TZ=UTC date -j -f "%Y-%m-%dT%H:%M:%S" "$stripped" +%s 2>/dev/null)
     else
         epoch=$(date -j -f "%Y-%m-%dT%H:%M:%S" "$stripped" +%s 2>/dev/null)
@@ -341,16 +356,10 @@ format_reset_time() {
     local style="$2"
     { [ -z "$iso_str" ] || [ "$iso_str" = "null" ]; } && return
 
-    # Parse ISO datetime and convert to local time (cross-platform)
     local epoch
     epoch=$(iso_to_epoch "$iso_str")
     [ -z "$epoch" ] && return
 
-    # Format based on style
-    # Try GNU date first (Linux), then BSD date (macOS)
-    # Previous implementation piped BSD date through sed/tr, which always returned
-    # exit code 0 from the last pipe stage, preventing the GNU date fallback from
-    # ever executing on Linux.
     local formatted=""
     case "$style" in
         time)
@@ -369,10 +378,28 @@ format_reset_time() {
     [ -n "$formatted" ] && echo "$formatted"
 }
 
+# Session cost with per-message delta
+session_cost=$(echo "$input" | jq -r '.cost.total_cost_usd // 0')
+if [ -n "$session_cost" ] && [ "$session_cost" != "0" ]; then
+    cost_fmt=$(LC_NUMERIC=C awk -v c="$session_cost" 'BEGIN {printf "$%.2f", c}')
+    out+=" ${dim}|${reset} ${purple}${cost_fmt}${reset}"
+
+    cost_prev_file="/tmp/claude/statusline-cost-prev-${claude_config_dir_hash}.txt"
+    prev_cost=0
+    [ -f "$cost_prev_file" ] && prev_cost=$(cat "$cost_prev_file" 2>/dev/null)
+    prev_cost=${prev_cost:-0}
+    delta=$(LC_NUMERIC=C awk -v c="$session_cost" -v p="$prev_cost" 'BEGIN {d=c-p; printf "%.4f", (d<0)?0:d}')
+    show_delta=$(LC_NUMERIC=C awk -v p="$prev_cost" -v d="$delta" 'BEGIN {print (p > 0 && d >= 0.005) ? 1 : 0}')
+    if [ "$show_delta" = "1" ]; then
+        delta_fmt=$(LC_NUMERIC=C awk -v d="$delta" 'BEGIN {printf "$%.2f", d}')
+        out+=" ${dim}(+${delta_fmt})${reset}"
+    fi
+    echo "$session_cost" > "$cost_prev_file"
+fi
+
 sep=" ${dim}|${reset} "
 
 # Render extra_usage segment from API usage data (not available via stdin rate_limits).
-# Appends to the global $out. No-op when data is missing or is_enabled is false.
 render_extra_usage() {
     local data="$1"
     [ -z "$data" ] && return
@@ -443,7 +470,6 @@ if $effective_builtin; then
         "$_extra_json" > "$cache_file" 2>/dev/null
 elif [ -n "$usage_data" ] && echo "$usage_data" | jq -e '.five_hour' >/dev/null 2>&1; then
     # ---- Fall back: API-fetched usage data ----
-    # ---- 5-hour (current) ----
     five_hour_pct=$(echo "$usage_data" | jq -r '.five_hour.utilization // 0' | awk '{printf "%.0f", $1}')
     five_hour_reset_iso=$(echo "$usage_data" | jq -r '.five_hour.resets_at // empty')
     five_hour_reset=$(format_reset_time "$five_hour_reset_iso" "time")
@@ -452,7 +478,6 @@ elif [ -n "$usage_data" ] && echo "$usage_data" | jq -e '.five_hour' >/dev/null 
     out+="${sep}${white}5h${reset} ${five_hour_color}${five_hour_pct}%${reset}"
     [ -n "$five_hour_reset" ] && out+=" ${dim}@${five_hour_reset}${reset}"
 
-    # ---- 7-day (weekly) ----
     seven_day_pct=$(echo "$usage_data" | jq -r '.seven_day.utilization // 0' | awk '{printf "%.0f", $1}')
     seven_day_reset_iso=$(echo "$usage_data" | jq -r '.seven_day.resets_at // empty')
     seven_day_reset=$(format_reset_time "$seven_day_reset_iso" "datetime")
@@ -462,14 +487,10 @@ elif [ -n "$usage_data" ] && echo "$usage_data" | jq -e '.five_hour' >/dev/null 
     [ -n "$seven_day_reset" ] && out+=" ${dim}@${seven_day_reset}${reset}"
 
     render_extra_usage "$usage_data"
-else
-    # No valid usage data — show placeholders
-    out+="${sep}${white}5h${reset} ${dim}-${reset}"
-    out+="${sep}${white}7d${reset} ${dim}-${reset}"
 fi
 
 # ===== Update check (cached, 24h TTL) =====
-# Set STATUSLINE_CHECK_UPDATES=false to disable the update check (no network calls).
+# Set STATUSLINE_CHECK_UPDATES=false to disable (no network calls).
 update_line=""
 if [ "${STATUSLINE_CHECK_UPDATES:-true}" != "false" ]; then
     version_cache_file="/tmp/claude/statusline-version-cache.json"
