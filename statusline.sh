@@ -379,8 +379,9 @@ format_reset_time() {
 }
 
 # Session cost with per-message delta
+# Set CLAUDECODE_STATUSLINE_SHOW_COST=false to hide.
 session_cost=$(echo "$input" | jq -r '.cost.total_cost_usd // 0')
-if [ -n "$session_cost" ] && [ "$session_cost" != "0" ]; then
+if [ "${CLAUDECODE_STATUSLINE_SHOW_COST:-true}" != "false" ] && [ -n "$session_cost" ] && [ "$session_cost" != "0" ]; then
     cost_fmt=$(LC_NUMERIC=C awk -v c="$session_cost" 'BEGIN {printf "$%.2f", c}')
     out+=" ${dim}|${reset} ${purple}${cost_fmt}${reset}"
 
@@ -487,12 +488,15 @@ elif [ -n "$usage_data" ] && echo "$usage_data" | jq -e '.five_hour' >/dev/null 
     [ -n "$seven_day_reset" ] && out+=" ${dim}@${seven_day_reset}${reset}"
 
     render_extra_usage "$usage_data"
+elif [ "${CLAUDECODE_STATUSLINE_SHOW_USAGE_PLACEHOLDERS:-false}" = "true" ]; then
+    out+="${sep}${white}5h${reset} ${dim}-${reset}"
+    out+="${sep}${white}7d${reset} ${dim}-${reset}"
 fi
 
 # ===== Update check (cached, 24h TTL) =====
-# Set STATUSLINE_CHECK_UPDATES=false to disable (no network calls).
+# Set CLAUDECODE_STATUSLINE_CHECK_UPDATES=false to disable (no network calls).
 update_line=""
-if [ "${STATUSLINE_CHECK_UPDATES:-true}" != "false" ]; then
+if [ "${CLAUDECODE_STATUSLINE_CHECK_UPDATES:-true}" != "false" ]; then
     version_cache_file="/tmp/claude/statusline-version-cache.json"
     version_cache_max_age=86400  # 24 hours
 
@@ -525,13 +529,14 @@ if [ "${STATUSLINE_CHECK_UPDATES:-true}" != "false" ]; then
     if [ -n "$version_data" ]; then
         latest_tag=$(echo "$version_data" | jq -r '.tag_name // empty')
         if [ -n "$latest_tag" ] && version_gt "$latest_tag" "$VERSION"; then
-            update_line="\n${dim}Update available: ${latest_tag} → Tell Claude: \"Find my installed status bar and update it\"${reset}"
+            update_line="\n${dim}Update available: ${latest_tag} → This is a fork — pulling upstream will overwrite your customizations. See github.com/ericraymond/ClaudeCodeStatusLine README to update.${reset}"
         fi
     fi
 fi
 
 # Append CLI version as last segment
-if [ -n "$cli_version" ]; then
+# Set CLAUDECODE_STATUSLINE_SHOW_CLI_VERSION=true to show.
+if [ "${CLAUDECODE_STATUSLINE_SHOW_CLI_VERSION:-false}" = "true" ] && [ -n "$cli_version" ]; then
     out+=" ${dim}|${reset} ${orange}v${cli_version}${reset}"
 fi
 

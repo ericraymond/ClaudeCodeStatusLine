@@ -1,6 +1,10 @@
-# Claude Code Status Line
+# Claude Code Status Line (ericraymond fork)
 
-A custom status line for [Claude Code](https://claude.com/claude-code) that displays model info, token usage, rate limits, and reset times in a single compact line. It runs as an external shell command, so it does not slow down Claude Code or consume any extra tokens.
+A custom status line for [Claude Code](https://claude.com/claude-code) that displays model info,
+token usage, cost, git context, and rate limits in a single compact line. Runs as an external shell
+command — no slowdown, no extra tokens.
+
+Forked from [daniel3303/ClaudeCodeStatusLine](https://github.com/daniel3303/ClaudeCodeStatusLine).
 
 ## Screenshot
 
@@ -10,10 +14,10 @@ A custom status line for [Claude Code](https://claude.com/claude-code) that disp
 
 | Segment | Description |
 |---------|-------------|
-| **Model** | Current model name (e.g., Opus 4.7) |
-| **CWD@Branch** | Current folder name, git branch, and file changes (+/-) |
-| **Tokens** | Used / total context window tokens (% used) |
-| **Effort** | Reasoning effort level (low, med, high, xhigh) |
+| **Model (effort)** | Model name with reasoning effort inline, e.g. `Sonnet 4.6 (high)` |
+| **Tokens** | Used / total context tokens (% used) |
+| **dir@branch** | Current folder, git branch, and staged/unstaged counts |
+| **Cost** | Session cost with per-message delta, e.g. `$0.42 (+$0.05)` |
 | **5h** | 5-hour rate limit usage percentage and reset time |
 | **7d** | 7-day rate limit usage percentage and reset time |
 | **Extra** | Extra usage credits spent / limit (if enabled) |
@@ -21,59 +25,78 @@ A custom status line for [Claude Code](https://claude.com/claude-code) that disp
 
 Usage percentages are color-coded: green (<50%) → yellow (≥50%) → orange (≥70%) → red (≥90%).
 
+## Changes from upstream
+
+- Layout: `Model (effort) | tokens (%) | dir@branch | cost (+delta) | 5h | 7d`
+- Session cost display with per-message delta
+- Effort level shown inline next to model name instead of as a separate segment
+- 5h/7d hidden when no usage data (no placeholder dashes by default)
+- `awk` injection fixed: shell vars passed via `-v` instead of string interpolation
+- All env vars use `CLAUDECODE_STATUSLINE_` prefix
+
 ## Installation
 
-Ask Claude Code:
+```bash
+mkdir -p ~/.claude/statusline
+curl -o ~/.claude/statusline/statusline.sh \
+  https://raw.githubusercontent.com/ericraymond/ClaudeCodeStatusLine/main/statusline.sh
+chmod +x ~/.claude/statusline/statusline.sh
+```
 
-> Clone https://github.com/daniel3303/ClaudeCodeStatusLine to `~/.claude/statusline/` (or `%USERPROFILE%\.claude\statusline\` on Windows) and configure it as my status bar by following its INSTALL.md.
+Then wire it into Claude Code:
 
-Claude will clone the repo to that path, pick the right script for your OS, and update `settings.json`. Full step-by-step instructions Claude follows live in [INSTALL.md](INSTALL.md).
+```bash
+jq '.statusLine = {"type":"command","command":"~/.claude/statusline/statusline.sh"}' \
+  ~/.claude/settings.json > /tmp/sl.json && mv /tmp/sl.json ~/.claude/settings.json
+```
 
-Restart Claude Code after Claude saves the configuration.
+Restart Claude Code.
 
 ### Updating
 
-When the status line shows a new release is available, ask Claude:
-
-> Find my installed status bar and update it.
-
-Or update it yourself:
-
 ```bash
-git -C ~/.claude/statusline pull
+cp /path/to/this/repo/statusline.sh ~/.claude/statusline/statusline.sh
 ```
 
-No `settings.json` changes are needed — the path stays valid across versions.
+Or re-run the `curl` command above. No `settings.json` changes needed.
+
+## Configuration
+
+All options are set via environment variables (e.g. in `~/.zshrc` or `~/.bashrc`).
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `CLAUDECODE_STATUSLINE_SHOW_COST` | `true` | Show session cost and per-message delta |
+| `CLAUDECODE_STATUSLINE_SHOW_CLI_VERSION` | `false` | Show Claude CLI version (e.g. `v2.1.161`) |
+| `CLAUDECODE_STATUSLINE_CHECK_UPDATES` | `true` | Check GitHub for new releases every 24h |
+| `CLAUDECODE_STATUSLINE_SHOW_USAGE_PLACEHOLDERS` | `false` | Show `5h -` / `7d -` when no usage data |
+
+When an update is available, a second line appears below the status bar. The check hits
+`api.github.com` once per 24h and fails silently if unreachable.
+
+Example — hide cost, show CLI version:
+
+```bash
+export CLAUDECODE_STATUSLINE_SHOW_COST=false
+export CLAUDECODE_STATUSLINE_SHOW_CLI_VERSION=true
+```
 
 ## Requirements
 
 - Claude Code with OAuth authentication (Pro/Max subscription for rate-limit and extra-usage data)
 - `git` in `PATH`
 - macOS / Linux: `jq` and `curl`
-- Windows: PowerShell 5.1+ (default on Windows 10/11)
 
 ## Caching
 
-Usage data from the Anthropic API is cached for 60 seconds at `/tmp/claude/statusline-usage-cache-<hash>.json` (or `%TEMP%\claude\...` on Windows). Release checks are cached for 24 hours. Both caches are shared across concurrent Claude Code instances to avoid rate limits.
-
-## Update Notifications
-
-The status line checks GitHub for new releases once every 24 hours via an outbound HTTP request to `api.github.com`. When a newer version is available, a second line appears below the status line. The check fails silently if the API is unreachable.
-
-To disable the update check entirely (no network calls):
-
-```bash
-export STATUSLINE_CHECK_UPDATES=false
-```
+Usage data is cached for 60 seconds at `/tmp/claude/statusline-usage-cache-<hash>.json`. Release
+checks are cached for 24 hours. Both caches are shared across concurrent Claude Code instances to
+avoid rate limits.
 
 ## License
 
 MIT
 
-## Author
+## Credits
 
-Daniel Oliveira
-
-[![Website](https://img.shields.io/badge/Website-FF6B6B?style=for-the-badge&logo=safari&logoColor=white)](https://danielapoliveira.com/)
-[![X](https://img.shields.io/badge/X-000000?style=for-the-badge&logo=x&logoColor=white)](https://x.com/daniel_not_nerd)
-[![LinkedIn](https://img.shields.io/badge/LinkedIn-0077B5?style=for-the-badge&logo=linkedin&logoColor=white)](https://www.linkedin.com/in/daniel-ap-oliveira/)
+Original by [Daniel Oliveira](https://github.com/daniel3303/ClaudeCodeStatusLine).
