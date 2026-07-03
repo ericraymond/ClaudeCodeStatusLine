@@ -152,8 +152,19 @@ if [ -z "$cli_version" ]; then
     fi
 fi
 
+# Config dir tag — last word after the final hyphen in CLAUDE_CONFIG_DIR, uppercased.
+# e.g. /Users/foo/.claude-quad -> [QUAD]. Omitted entirely if unset or no hyphen present.
+config_tag=""
+if [ -n "$CLAUDE_CONFIG_DIR" ]; then
+    tag_raw="${CLAUDE_CONFIG_DIR##*-}"
+    if [ -n "$tag_raw" ] && [ "$tag_raw" != "$CLAUDE_CONFIG_DIR" ]; then
+        config_tag=$(printf '%s' "$tag_raw" | tr '[:lower:]' '[:upper:]')
+    fi
+fi
+
 # ===== Build single-line output =====
 out=""
+[ -n "$config_tag" ] && out+="${green}[${config_tag}]${reset} "
 effort_colored=""
 case "$effort_level" in
     low)    effort_colored="${dim}${effort_level}${reset}" ;;

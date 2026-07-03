@@ -141,8 +141,17 @@ if (-not $cliVersion) {
     } catch {}
 }
 
+# Config dir tag — last word after the final hyphen in CLAUDE_CONFIG_DIR, uppercased.
+# e.g. C:\Users\foo\.claude-quad -> [QUAD]. Omitted entirely if unset or no hyphen present.
+$configTag = ""
+if ($env:CLAUDE_CONFIG_DIR -and $env:CLAUDE_CONFIG_DIR.Contains('-')) {
+    $tagRaw = $env:CLAUDE_CONFIG_DIR.Substring($env:CLAUDE_CONFIG_DIR.LastIndexOf('-') + 1)
+    if ($tagRaw) { $configTag = $tagRaw.ToUpper() }
+}
+
 # ===== Build single-line output =====
 $out = ""
+if ($configTag) { $out += "${green}[${configTag}]${reset} " }
 $out += "${blue}${modelName}${reset}"
 
 # Current working directory
